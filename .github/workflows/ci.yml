@@ -64,6 +64,6 @@ jobs:
           ./bin/agent ls
           echo "smoke" > .worktrees/smoke-check/SMOKE
           AGENT_AUTO_PUSH=0 ./bin/agent ship smoke-check -m "smoke check" --no-pr
-          git log --oneline agent/smoke-check | head -1
+          git log --oneline -1 agent/smoke-check
           ./bin/agent rm smoke-check
           test ! -d .worktrees/smoke-check

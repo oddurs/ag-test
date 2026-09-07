@@ -51,9 +51,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: install cairn
         # The package is `cairn-md` (both `cairn` and `cairn-cli` on crates.io
-        # belong to unrelated crates); the binary it installs is `cairn`. Not
-        # published yet, so install from the tagged source.
-        run: cargo install --git https://github.com/oddurs/cairn --tag v0.1.0-rc.1 --locked cairn-md
+        # belong to unrelated crates); the binary it installs is `cairn`.
+        #
+        # Tracking `main` rather than the v0.1.0-rc.1 tag: this backlog is
+        # written in on-disk format 2, and the tagged build only understands
+        # format 1. Pin to a tag again once one ships that reads format 2.
+        run: cargo install --git https://github.com/oddurs/cairn --branch main --locked cairn-md
       - name: validate items against the schema
         run: cairn check
       - name: roadmap is current

@@ -47,8 +47,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: install cairn
-        run: cargo install cairn --version 0.1.0-rc.1 --locked
+        # Not the `cairn` on crates.io - that name belongs to an unrelated
+        # placeholder crate. Install from source, pinned to a tag.
+        run: cargo install --git https://github.com/oddurs/cairn --tag v0.1.0-rc.1 --locked cairn
       - name: validate items against the schema
         run: cairn check
       - name: roadmap is current

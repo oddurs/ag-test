@@ -1,0 +1,13 @@
+# agent workflow state
+/.worktrees/
+/.agent/
+!/.agent/config.local.sh.example
+
+# rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# os / editor
+.DS_Store
+*.swp

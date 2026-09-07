@@ -1,0 +1,69 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  rust:
+    name: rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: test
+        run: cargo test --all
+
+  shell:
+    name: shell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          shellcheck --version
+          shellcheck -x -s bash \
+            bin/agent \
+            lib/*.sh \
+            scripts/*.sh \
+            .githooks/commit-msg \
+            .githooks/pre-commit \
+            agent.config.sh
+
+  harness:
+    name: worktree harness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: bootstrap
+        run: ./scripts/setup.sh
+      - name: agent doctor
+        # The agent CLI is absent on CI; doctor reports it and still exits 0.
+        run: ./bin/agent doctor
+      - name: worktree lifecycle
+        run: |
+          set -euo pipefail
+          git config user.name "ci"
+          git config user.email "ci@example.invalid"
+          ./bin/agent new smoke-check
+          test -d .worktrees/smoke-check
+          ./bin/agent ls
+          echo "smoke" > .worktrees/smoke-check/SMOKE
+          AGENT_AUTO_PUSH=0 ./bin/agent ship smoke-check -m "smoke check" --no-pr
+          git log --oneline agent/smoke-check | head -1
+          ./bin/agent rm smoke-check
+          test ! -d .worktrees/smoke-check

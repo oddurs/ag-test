@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Block attribution markers from entering the tree itself.
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+if [ -x "$repo_root/scripts/check-attribution.sh" ]; then
+  "$repo_root/scripts/check-attribution.sh" --staged || {
+    echo "pre-commit: attribution markers found in staged changes" >&2
+    exit 1
+  }
+fi

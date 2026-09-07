@@ -1,0 +1,10 @@
+# One task per line:  <task-name> :: <prompt>
+# Blank lines and #-comments are ignored.
+# Run with:  ./bin/agent fleet tasks.example.txt -j 4
+#
+# Each line gets its own git worktree, its own branch, its own agent
+# process and its own log. They cannot see or clobber each other.
+
+docs-index      :: Add a table of contents to docs/README.md linking every document in docs/.
+clippy-clean    :: Fix all clippy warnings in the workspace without changing behaviour.
+verify-msrv     :: Determine the minimum supported Rust version and document it in README.md.

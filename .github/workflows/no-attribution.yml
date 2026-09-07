@@ -1,0 +1,33 @@
+name: no-attribution
+
+# The repository carries no tool, model or assistant attribution. Local hooks
+# strip and block it; this job is the backstop for a bypassed hook.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    name: attribution policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: scan tree and full history
+        run: ./scripts/check-attribution.sh
+      - name: scan pull request metadata
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          if printf '%s\n%s\n' "$PR_TITLE" "$PR_BODY" \
+            | grep -q -i -E 'co-authored-by|generated (with|by) .{0,12}claude|claude\.ai/code'; then
+            echo "attribution found in pull request title or body" >&2
+            exit 1
+          fi
+          echo "pull request metadata clean"

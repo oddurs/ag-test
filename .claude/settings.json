@@ -1,0 +1,25 @@
+{
+  "includeCoAuthoredBy": false,
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo nextest:*)",
+      "Bash(shellcheck:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(./bin/agent:*)",
+      "Bash(./scripts/check-attribution.sh:*)"
+    ],
+    "deny": [
+      "Bash(git config --global:*)",
+      "Bash(git commit --no-verify:*)",
+      "Bash(git push --force:*)"
+    ]
+  }
+}

@@ -1,0 +1,397 @@
+#!/usr/bin/env bash
+# agent - full-auto agentic git worktree workflow.
+#
+#   agent new <task>                 create an isolated worktree + branch
+#   agent run <task> <prompt...>     run the coding agent in that worktree
+#   agent ship <task>                commit, push, open a PR
+#   agent auto <task> <prompt...>    new + run + verify + ship, unattended
+#   agent fleet <tasks-file>         run many tasks in parallel worktrees
+#
+# Bash 3.2 compatible (stock macOS).
+
+set -euo pipefail
+
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+LIB_DIR="$(cd "$(dirname "$SELF")/../lib" && pwd)"
+# shellcheck source-path=SCRIPTDIR source=../lib/common.sh
+. "$LIB_DIR/common.sh"
+
+usage() {
+  cat <<'__HELP__'
+agent - full-auto agentic git worktree workflow
+
+USAGE
+  agent <command> [options]
+
+WORKTREES
+  new <task> [--base <ref>]        Create worktree .worktrees/<task> on branch agent/<task>
+  ls                               List managed worktrees, branches and status
+  cd <task>                        Print the worktree path (use: cd "$(agent cd x)")
+  rm <task> [--force]              Remove the worktree (branch is kept)
+  gc [--merged]                    Remove worktrees whose branches are gone or merged
+
+AGENTS
+  run <task> <prompt...>           Run the agent unattended inside the worktree
+  run <task> --file <path>         Read the prompt from a file ('-' for stdin)
+  auto <task> <prompt...>          new + run + verify + ship in one shot
+  fleet <tasks-file> [-j N]        Fan out: one worktree + agent per task line
+  log <task> [-f]                  Show (or follow) the agent log
+
+INTEGRATION
+  verify <task>                    Run AGENT_VERIFY_CMD inside the worktree
+  ship <task> [-m <msg>] [--no-pr] Commit, push and open a pull request
+  init                             Install hooks + local git config for this repo
+  doctor                           Check the environment
+
+Options are per-command; see docs/workflow.md for the full reference.
+__HELP__
+}
+
+# --------------------------------------------------------------------- new --
+
+cmd_new() {
+  local slug="${1:-}"; shift || true
+  require_slug "$slug"
+  local base="$AGENT_BASE_BRANCH"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --base) base="${2:?--base needs a ref}"; shift 2 ;;
+      *) die "new: unexpected argument '$1'" ;;
+    esac
+  done
+
+  local wt branch
+  wt="$(worktree_for "$slug")"; branch="$(branch_for "$slug")"
+
+  if [ -d "$wt" ]; then
+    dim "worktree already exists: $wt"
+    printf '%s\n' "$wt"
+    return 0
+  fi
+
+  mkdir -p "$AGENT_WORKTREE_ROOT"
+
+  # Fetch quietly so branches start from the freshest base we can see.
+  if git -C "$MAIN_ROOT" remote get-url origin >/dev/null 2>&1; then
+    git -C "$MAIN_ROOT" fetch --quiet origin "$base" 2>/dev/null || true
+  fi
+
+  local start="$base"
+  if git -C "$MAIN_ROOT" show-ref --verify --quiet "refs/remotes/origin/$base"; then
+    start="origin/$base"
+  fi
+
+  log "new worktree $slug (branch $branch from $start)"
+  if git -C "$MAIN_ROOT" show-ref --verify --quiet "refs/heads/$branch"; then
+    git -C "$MAIN_ROOT" worktree add --quiet "$wt" "$branch"
+  else
+    git -C "$MAIN_ROOT" worktree add --quiet -b "$branch" "$wt" "$start"
+  fi
+
+  if [ -n "$AGENT_SETUP_CMD" ]; then
+    log "setup: $AGENT_SETUP_CMD"
+    ( cd "$wt" && eval "$AGENT_SETUP_CMD" ) \
+      || die "setup command failed in $wt"
+  fi
+
+  ok "worktree ready: $wt"
+  printf '%s\n' "$wt"
+}
+
+# --------------------------------------------------------------------- run --
+
+cmd_run() {
+  local slug="${1:-}"; shift || true
+  require_slug "$slug"
+
+  local prompt="" prompt_file=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --file) prompt_file="${2:?--file needs a path}"; shift 2 ;;
+      --) shift; prompt="$prompt${prompt:+ }$*"; break ;;
+      *) prompt="$prompt${prompt:+ }$1"; shift ;;
+    esac
+  done
+
+  if [ -n "$prompt_file" ]; then
+    if [ "$prompt_file" = "-" ]; then prompt="$(cat)"; else
+      [ -f "$prompt_file" ] || die "no such prompt file: $prompt_file"
+      prompt="$(cat "$prompt_file")"
+    fi
+  fi
+  [ -n "$prompt" ] || die "run: empty prompt"
+
+  worktree_exists "$slug" || cmd_new "$slug" >/dev/null
+
+  local wt logf
+  wt="$(worktree_for "$slug")"; logf="$(log_for "$slug")"
+  have "$AGENT_CLI" || die "agent CLI not found: $AGENT_CLI (set AGENT_CLI)"
+
+  log "run $slug -> $logf"
+  {
+    printf '=== %s | %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$slug"
+    printf '=== prompt: %s\n\n' "$prompt"
+  } >> "$logf"
+
+  # Unattended: no TTY, no prompts, output tee'd to the task log.
+  set +e
+  # AGENT_CLI_ARGS is a flag string and must word-split.
+  # shellcheck disable=SC2086
+  ( cd "$wt" && "$AGENT_CLI" $AGENT_CLI_ARGS -p "$prompt" ) 2>&1 | tee -a "$logf"
+  local rc=${PIPESTATUS[0]}
+  set -e
+
+  printf '\n=== exit %s\n\n' "$rc" >> "$logf"
+  [ "$rc" -eq 0 ] || die "agent exited $rc (see $logf)"
+  ok "run complete: $slug"
+}
+
+# ------------------------------------------------------------------ verify --
+
+cmd_verify() {
+  local slug="${1:-}"; require_slug "$slug"; require_worktree "$slug"
+  [ -n "$AGENT_VERIFY_CMD" ] || { dim "no AGENT_VERIFY_CMD configured"; return 0; }
+  local wt; wt="$(worktree_for "$slug")"
+  log "verify $slug: $AGENT_VERIFY_CMD"
+  ( cd "$wt" && eval "$AGENT_VERIFY_CMD" ) || die "verify failed for $slug"
+  ok "verify passed: $slug"
+}
+
+# -------------------------------------------------------------------- ship --
+
+cmd_ship() {
+  local slug="${1:-}"; shift || true
+  require_slug "$slug"; require_worktree "$slug"
+
+  local msg="" want_pr="$AGENT_AUTO_PR"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -m|--message) msg="${2:?-m needs a message}"; shift 2 ;;
+      --no-pr) want_pr=0; shift ;;
+      --pr) want_pr=1; shift ;;
+      *) die "ship: unexpected argument '$1'" ;;
+    esac
+  done
+
+  local wt branch; wt="$(worktree_for "$slug")"; branch="$(branch_for "$slug")"
+  [ -n "$msg" ] || msg="$(printf '%s' "$slug" | tr '-' ' ')"
+
+  if [ -n "$(git -C "$wt" status --porcelain)" ]; then
+    log "commit $slug"
+    git -C "$wt" add -A
+    git -C "$wt" commit --quiet -m "$msg"
+  else
+    dim "nothing to commit in $slug"
+  fi
+
+  if [ "$(git -C "$wt" rev-list --count "$AGENT_BASE_BRANCH..$branch" 2>/dev/null || echo 0)" = "0" ]; then
+    warn "$slug has no commits ahead of $AGENT_BASE_BRANCH; nothing to ship"
+    return 0
+  fi
+
+  [ "$AGENT_AUTO_PUSH" = "1" ] || { dim "push disabled"; return 0; }
+  git -C "$wt" remote get-url origin >/dev/null 2>&1 \
+    || { warn "no origin remote; skipping push"; return 0; }
+
+  log "push $branch"
+  git -C "$wt" push --quiet -u origin "$branch"
+
+  if [ "$want_pr" = "1" ] && have gh; then
+    if gh pr view --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo '')" "$branch" >/dev/null 2>&1; then
+      dim "pull request already open for $branch"
+    else
+      log "open pull request"
+      local draft=""; [ "$AGENT_PR_DRAFT" = "1" ] && draft="--draft"
+      # shellcheck disable=SC2086  # $draft is an optional flag, not a word
+      ( cd "$wt" && gh pr create $draft --base "$AGENT_BASE_BRANCH" --head "$branch" \
+          --title "$msg" --body "Automated change from the \`$slug\` agent task." ) \
+        || warn "gh pr create failed; branch is pushed"
+    fi
+  fi
+  ok "shipped: $slug"
+}
+
+# -------------------------------------------------------------------- auto --
+
+cmd_auto() {
+  local slug="${1:-}"; shift || true
+  require_slug "$slug"
+  cmd_new "$slug" >/dev/null
+  cmd_run "$slug" "$@"
+  cmd_verify "$slug"
+  cmd_ship "$slug"
+}
+
+# ------------------------------------------------------------------- fleet --
+
+# Task file lines: "<slug> :: <prompt>". Blank lines and #-comments ignored.
+cmd_fleet() {
+  local file="" jobs="$AGENT_JOBS"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -j|--jobs) jobs="${2:?-j needs a number}"; shift 2 ;;
+      *) file="$1"; shift ;;
+    esac
+  done
+  [ -n "$file" ] || die "fleet: missing tasks file ('-' for stdin)"
+
+  local tmp; tmp="$(mktemp -t agent-fleet)"
+  # shellcheck disable=SC2064
+  trap "rm -f '$tmp'" EXIT
+  if [ "$file" = "-" ]; then cat > "$tmp"; else
+    [ -f "$file" ] || die "no such tasks file: $file"
+    cat "$file" > "$tmp"
+  fi
+
+  local count
+  count="$(grep -c -v -e '^[[:space:]]*$' -e '^[[:space:]]*#' "$tmp" || true)"
+  [ "${count:-0}" -gt 0 ] || die "fleet: no tasks in $file"
+  log "fleet: $count task(s), $jobs at a time"
+
+  # xargs gives us a portable bounded worker pool on bash 3.2.
+  grep -v -e '^[[:space:]]*$' -e '^[[:space:]]*#' "$tmp" \
+    | xargs -P "$jobs" -I{} "$SELF" _fleet-one {} \
+    || die "fleet: one or more tasks failed (see $AGENT_LOG_DIR)"
+  ok "fleet complete"
+}
+
+# Internal: run a single "<slug> :: <prompt>" line.
+cmd_fleet_one() {
+  local line="$*" slug prompt
+  case "$line" in
+    *"::"*)
+      slug="$(printf '%s' "${line%%::*}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+      prompt="$(printf '%s' "${line#*::}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+      ;;
+    *) prompt="$line"; slug="$(slugify "$line")" ;;
+  esac
+  slug="$(slugify "$slug")"
+  [ -n "$slug" ] || die "fleet: could not derive a task name from: $line"
+  cmd_auto "$slug" "$prompt"
+}
+
+# --------------------------------------------------------------- inventory --
+
+cmd_ls() {
+  local slugs; slugs="$(list_slugs)"
+  [ -n "$slugs" ] || { dim "no agent worktrees"; return 0; }
+  printf '%-24s %-28s %-8s %s\n' TASK BRANCH AHEAD STATE
+  local slug
+  for slug in $slugs; do
+    local wt branch ahead state
+    wt="$(worktree_for "$slug")"; branch="$(branch_for "$slug")"
+    ahead="$(git -C "$wt" rev-list --count "$AGENT_BASE_BRANCH..HEAD" 2>/dev/null || echo '-')"
+    if [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then
+      state="dirty"
+    elif [ "$ahead" != "0" ] && [ "$ahead" != "-" ]; then
+      state="ready"
+    else
+      state="clean"
+    fi
+    printf '%-24s %-28s %-8s %s\n' "$slug" "$branch" "$ahead" "$state"
+  done
+}
+
+cmd_cd() {
+  local slug="${1:-}"; require_slug "$slug"; require_worktree "$slug"
+  worktree_for "$slug"
+}
+
+cmd_log() {
+  local slug="${1:-}"; shift || true
+  require_slug "$slug"
+  local logf; logf="$(log_for "$slug")"
+  [ -f "$logf" ] || die "no log for $slug"
+  if [ "${1:-}" = "-f" ]; then tail -f "$logf"; else cat "$logf"; fi
+}
+
+cmd_rm() {
+  local slug="${1:-}"; shift || true
+  require_slug "$slug"
+  local force=""
+  [ "${1:-}" = "--force" ] && force="--force"
+  local wt; wt="$(worktree_for "$slug")"
+  [ -d "$wt" ] || { dim "no worktree $slug"; return 0; }
+  if [ -z "$force" ] && [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then
+    die "$slug has uncommitted changes (use --force to discard)"
+  fi
+  # shellcheck disable=SC2086  # $force is an optional flag, not a word
+  git -C "$MAIN_ROOT" worktree remove $force "$wt"
+  ok "removed worktree $slug (branch $(branch_for "$slug") kept)"
+}
+
+cmd_gc() {
+  local merged_only=0
+  [ "${1:-}" = "--merged" ] && merged_only=1
+  git -C "$MAIN_ROOT" worktree prune
+  local slug
+  for slug in $(list_slugs); do
+    local wt branch ahead; wt="$(worktree_for "$slug")"; branch="$(branch_for "$slug")"
+    [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ] && continue
+    ahead="$(git -C "$wt" rev-list --count "$AGENT_BASE_BRANCH..HEAD" 2>/dev/null || echo 1)"
+    if [ "$ahead" = "0" ]; then
+      log "gc: $slug is fully merged into $AGENT_BASE_BRANCH"
+      git -C "$MAIN_ROOT" worktree remove "$wt"
+      git -C "$MAIN_ROOT" branch -q -d "$branch" 2>/dev/null || true
+    elif [ "$merged_only" = "0" ] && ! git -C "$MAIN_ROOT" show-ref --verify --quiet "refs/heads/$branch"; then
+      log "gc: $slug branch is gone"
+      git -C "$MAIN_ROOT" worktree remove --force "$wt"
+    fi
+  done
+  ok "gc done"
+}
+
+# ------------------------------------------------------------ init/doctor ---
+
+cmd_init() { "$MAIN_ROOT/scripts/setup.sh"; }
+
+cmd_doctor() {
+  local bad=0
+  printf 'repo         %s\n' "$MAIN_ROOT"
+  printf 'base branch  %s\n' "$AGENT_BASE_BRANCH"
+  printf 'worktrees    %s\n' "$AGENT_WORKTREE_ROOT"
+  printf 'agent cli    %s %s\n' "$AGENT_CLI" "$AGENT_CLI_ARGS"
+
+  if have "$AGENT_CLI"; then ok "agent CLI found"; else warn "agent CLI '$AGENT_CLI' not on PATH"; bad=1; fi
+  if have gh; then ok "gh found"; else warn "gh not found (PRs disabled)"; fi
+
+  local hp; hp="$(git -C "$MAIN_ROOT" config --get core.hooksPath || true)"
+  if [ "$hp" = ".githooks" ]; then ok "core.hooksPath=.githooks"; else
+    warn "core.hooksPath is '${hp:-unset}' - run: agent init"; bad=1
+  fi
+
+  if "$MAIN_ROOT/scripts/check-attribution.sh" --quiet; then
+    ok "no attribution trailers in history or tree"
+  else
+    warn "attribution found - see scripts/check-attribution.sh"; bad=1
+  fi
+
+  [ "$bad" = "0" ] && ok "all checks passed"
+  return 0
+}
+
+# -------------------------------------------------------------------- main --
+
+main() {
+  local cmd="${1:-}"; shift || true
+  case "$cmd" in
+    ""|-h|--help|help) usage ;;
+    new)        load_config; cmd_new "$@" ;;
+    run)        load_config; cmd_run "$@" ;;
+    auto)       load_config; cmd_auto "$@" ;;
+    fleet)      load_config; cmd_fleet "$@" ;;
+    _fleet-one) load_config; cmd_fleet_one "$@" ;;
+    verify)     load_config; cmd_verify "$@" ;;
+    ship)       load_config; cmd_ship "$@" ;;
+    ls|list)    load_config; cmd_ls "$@" ;;
+    cd|path)    load_config; cmd_cd "$@" ;;
+    log|logs)   load_config; cmd_log "$@" ;;
+    rm|remove)  load_config; cmd_rm "$@" ;;
+    gc|prune)   load_config; cmd_gc "$@" ;;
+    init)       load_config; cmd_init "$@" ;;
+    doctor)     load_config; cmd_doctor "$@" ;;
+    *) die "unknown command '$cmd' (try: agent help)" ;;
+  esac
+}
+
+main "$@"

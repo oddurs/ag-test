@@ -1,14 +1,15 @@
-//! Guarding the oracle.
+//! Guarding the oracle, because the reader has an incentive to cheat.
 //!
-//! Test-based rewards are the most scalable signal we have for coding agents,
-//! and they are also the easiest to game: an agent that can edit the suite can
-//! delete the assertion instead of satisfying it. The two failures look
-//! identical from the outside — both are a green check.
+//! The agent is graded by the suite and can edit it. Deleting the assertion and
+//! fixing the bug produce an identical green checkmark, and nobody had to think
+//! about that when the grader and the graded were different people. It needs no
+//! intent either: an agent minimising the distance to green will find the
+//! cheaper edit, and the cheaper edit is very often in the test file.
 //!
-//! So `agt` treats the oracle as the asset under protection. Every case reports
-//! how strong its claim is, and every change to a case is classified as
-//! strengthening, neutral, or weakening. Weakening is not forbidden; it is made
-//! impossible to do quietly.
+//! So the suite is the asset under protection. Every case reports how strong its
+//! claim is, and every change to a case is classified as strengthening, neutral
+//! or weakening. Weakening is not forbidden — deleting a wrong test is real work
+//! — it is made impossible to do quietly.
 
 use serde::{Deserialize, Serialize};
 

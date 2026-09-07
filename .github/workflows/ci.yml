@@ -42,6 +42,22 @@ jobs:
             .githooks/pre-commit \
             agent.config.sh
 
+  backlog:
+    name: backlog
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install cairn
+        run: cargo install cairn --version 0.1.0-rc.1 --locked
+      - name: validate items against the schema
+        run: cairn check
+      - name: roadmap is current
+        run: |
+          set -euo pipefail
+          cairn render -q
+          git diff --exit-code ROADMAP.md \
+            || { echo "ROADMAP.md is stale - run \`cairn render\`" >&2; exit 1; }
+
   harness:
     name: worktree harness
     runs-on: ubuntu-latest

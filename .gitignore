@@ -1,3 +1,6 @@
+# runner state (written by `agt run`)
+/.agt/
+
 # agent workflow state
 /.worktrees/
 /.agent/

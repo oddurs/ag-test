@@ -1,6 +1,7 @@
 # Landscape: what "agentic testing" currently means
 
-Research notes behind [01-concept.md](01-concept.md). Surveyed September 2026.
+Research notes behind [01-concept.md](01-concept.md), which argues for the third
+of the three readings below. Surveyed September 2026.
 Every claim here links to its source; where sources disagree, the disagreement
 is noted rather than resolved.
 
@@ -222,17 +223,22 @@ runs. That is the layer `agt` is proposing.
 ## What the survey settles
 
 1. **"Agentic testing" is three ideas.** Any framework has to say which one it
-   is. `agt` is the third, and the third is the least occupied.
+   is. `agt` is the third — the suite as an interface for a non-human reader —
+   and the third is the least occupied.
 2. **Structured observations are the consensus interface.** Harness engineering
    assumes them; Rust's test tooling does not yet produce them at the fidelity a
-   repair loop needs.
-3. **Cache-first execution and decision-level replay are the same insight**,
-   reached independently from cost and from determinism. Freeze the model's
-   choice, keep the tool live.
-4. **Test-based reward is simultaneously the best signal and a measured attack
+   repair loop needs (§7). That gap is the product.
+3. **Nobody is supplying the memory.** Every source describes a loop that reads
+   failures; none describes a framework that tells the loop whether this failure
+   is the same one as last time. Failure identity is the least-discussed and
+   cheapest of the three consequences in [01-concept.md](01-concept.md).
+4. **Cache-first execution and decision-level replay are the same insight**,
+   reached independently from cost (§1) and from determinism (§4). Freeze the
+   model's choice, keep the tool live.
+5. **Test-based reward is simultaneously the best signal and a measured attack
    surface.** ~29% → ~0.6% under filtering is the number to design against.
-5. **The verification horizon is a real ceiling.** The honest response is to
-   make claim strength visible, not to promise coverage.
-6. **Everyone who has looked closely concludes humans stay in the loop** — and
+6. **The verification horizon is a real ceiling.** The honest response is to make
+   claim strength visible, not to promise coverage.
+7. **Everyone who has looked closely concludes humans stay in the loop** — and
    converges on the same placement: autonomy on the execution loop, human review
    on the oracle.

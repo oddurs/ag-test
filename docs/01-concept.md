@@ -1,171 +1,194 @@
-# Agentic-first testing
+# The reader changed
 
-> The concept document for `agt`. Written after a survey of what the phrase is
-> being used to mean in 2026 — see [02-landscape.md](02-landscape.md) for the
-> sources.
+The concept document for `agt`. The survey it came out of is
+[02-landscape.md](02-landscape.md); how it would be built is
+[03-architecture.md](03-architecture.md).
 
-## The problem with the phrase
+## Who your test suite is talking to
 
-"Agentic testing" is currently used for three different things, and they are
-routinely conflated:
+Think about who reads a test failure.
 
-| Reading | Who is the agent? | What is new |
-| --- | --- | --- |
-| **Agents *doing* the testing** | The agent is the QA engineer | Natural-language intent instead of scripts; self-healing selectors; autonomous exploration |
-| **Testing *of* agents** | The agent is the system under test | Trajectory evaluation, LLM-as-judge, statistical gates over nondeterministic output |
-| **Testing *for* agents** | The agent is the *consumer of the test suite* | The suite is an interface an autonomous repair loop reads and writes |
+When you wrote tests five years ago the audience was a person. A test fails, it
+prints a red block with a diff, and a human reads it, thinks *ah, the parser is
+accepting a trailing comma*, and goes and fixes it. Every design decision in
+every test framework — colour, a good diff, a stack trace, a summary line —
+assumes a pair of eyes and a brain on the other end.
 
-The first reading dominates the vendor literature and is mostly about browser
-automation. The second dominates the research literature and is mostly about
-evals. Both are real, and neither is a *testing framework* — the first is a
-product category, the second is a measurement discipline.
+That is not who is reading any more. Most of the time now a suite runs, fails,
+and the thing that reads the failure is an agent in a loop: run tests, read
+failure, change code, run tests again. It may go round thirty times before a
+human looks at anything.
 
-The third reading is the one that changes what a test framework should be, and
-it is the one `agt` takes.
+So the suite has become a machine-to-machine interface that is still formatted
+like a human-to-human one.
 
-## The thesis
+This is the whole thesis. Not *tests written by AI*, not *tests for AI systems*
+— see [02-landscape.md](02-landscape.md), where those are the two readings that
+already have the phrase "agentic testing" pointed at them. Just: **the audience
+changed, and nothing downstream of that has been redesigned.**
 
-**Most of a test suite's output is now read by a machine, and almost none of it
-is designed for one.**
+## What the new reader is like
 
-An agent working a repair loop does this, several times a minute:
+Take the audience seriously and it has three properties, none of which a test
+framework has ever had to design for.
 
-1. run the suite,
-2. parse human-formatted stderr back into structured meaning,
-3. guess which failure is the cause and which are downstream,
-4. change something,
-5. re-run and hope the signal was stable.
+### It has no memory
 
-Steps 2, 3 and 5 are pure loss. Step 2 is lossy string parsing of information
-the framework had in structured form and threw away. Step 3 is a ranking
-problem the framework is better positioned to answer than the agent is. Step 5
-is a coin flip whenever the suite is nondeterministic.
+A human remembers, without effort, that they saw this same error two minutes
+ago. An agent does not. Each run is a fresh read of fresh text. Nothing in the
+output tells it whether this failure is the one it was already working on, a
+different one it accidentally introduced, or the same bug relocated by its last
+edit.
 
-Agentic-first testing means designing the framework so those three steps stop
-existing. Concretely, three commitments:
+That gap produces the most expensive failure mode in agentic coding, and it is
+almost invisible from the outside: **the loop churns for twenty iterations
+without noticing it is making no progress.** Every iteration looks locally
+reasonable. The suite never says *this is the same thing you saw last time.*
 
-### 1. Failures are evidence, not prose
+### It has no intuition
 
-Every non-passing outcome produces a structured record — expected, observed,
-seed, stable fingerprint, minimized witness, the exact command to reproduce,
-and a ranked list of cheapest-next-probes. One NDJSON record per line; the
-human-readable renderer is built *over* that stream, not instead of it.
+A human reads `error: No such file or directory (os error 2)` in a test and
+knows instantly that the fixture is missing and the application code is fine.
+That inference is free, unconscious, and completely unavailable to an agent
+reading the same red text. An agent sees a failing test and starts editing the
+code the test names.
 
-This is not a formatting preference. Three things follow from it that cannot be
-retrofitted onto text output:
+The same gap makes flakiness qualitatively worse. A flaky test is mildly
+annoying to a person — you shrug, re-run, move on. The shrug is the whole
+mechanism, and it requires knowing that some failures do not mean anything. An
+agent cannot shrug. A test that randomly passes gets attributed to whatever the
+agent changed last, so it keeps a change that did nothing and moves on,
+confidently wrong. Noise in the suite is not an annoyance to a control loop; it
+is corruption of the signal driving it.
 
-- **Fingerprints make the loop stateful.** Same fingerprint after a change means
-  no progress. A *new* fingerprint means the change moved the failure rather
-  than fixing it — the single most common way an agent convinces itself it is
-  making progress while going in circles.
-- **`Inconclusive` stops a whole class of damage.** A missing fixture is not a
-  failing assertion, and an agent that cannot tell them apart will "fix" a
-  broken harness by editing application code. Most frameworks collapse both into
-  "red".
-- **Probes are separable from fixes.** The framework knows how to get more
-  information (shrink this input, re-run with this seed, bisect this trajectory).
-  It does not know what the code should do. Emitting only the former is what
-  keeps the framework honest.
+### It has an incentive to cheat
 
-The Rust ecosystem is already moving toward machine-readable *results* — the
-libtest JSON RFC, `cargo nextest`'s `--message-format`. Those answer *which*
-test failed. Evidence answers *how it failed and what to try next*, which is the
-part the agent is currently reconstructing by hand.
+This one is new in kind, not degree.
 
-### 2. Determinism is a resource the framework manages
+The agent is graded by the suite and has write access to it. Deleting the
+assertion and fixing the bug produce an identical green checkmark. Nobody had to
+think about this when the grader and the graded were different people, and the
+literature that has looked at it directly finds the effect is large, not
+marginal — filtering reward-hacked trajectories moved hacked resolution rates
+from about 29% to about 0.6%. Most of the naive signal was hollow.
 
-A repair loop is a control system, and a flaky suite is noise injected directly
-into its feedback path. For a human, flakiness is an annoyance to be worked
-around. For an agent it is a corrupted reward signal, and the damage compounds:
-the agent attributes a random pass to its last edit and locks in a change that
-did nothing.
+It is worth being precise that this needs no intent. An agent minimising the
+distance to green will find the cheaper edit, and the cheaper edit is very often
+in the test file.
 
-The deterministic-simulation-testing lineage — FoundationDB, and in Rust
-`madsim` and `turmoil` — already solved the hard version of this for distributed
-systems, by making an entire run a pure function of one seed. That requires
-owning four sources of entropy: execution order, randomness, time, and I/O.
+## Three consequences
 
-Agentic systems add a fifth: **model sampling**. And it needs different
-treatment than the other four, because the naive approach — record HTTP traffic
-with a VCR-style cassette and replay it — freezes too much. An HTTP cassette
-that recorded a successful run keeps replaying that success after you break the
-tool the model was calling. The recording captured the model's decision *and*
-the tool's execution as one opaque blob.
+Each property implies something the framework must do. This is the entire
+design.
 
-The right seam is the **decision boundary**: record what the model chose (tool
-name, arguments, final text), replay that, and dispatch the recorded arguments
-to the *live* tool. The expensive nondeterministic part is frozen; the part you
-are actually testing still runs.
+### No memory → give failures an identity
 
-### 3. The oracle is the asset, and it defends itself
+Every failure carries a **fingerprint**: content-addressed over the case, the
+claim, and the normalised observation — deliberately not over line numbers or
+timings. That single field converts a stateless reader into a stateful one:
 
-This is the commitment that makes the other two safe, and it comes straight out
-of the reinforcement-learning-for-code literature.
+- same fingerprint after a change → *your edit did nothing*
+- fingerprint gone → *fixed*
+- new fingerprint → *you moved the failure rather than fixing it*
 
-Execution-based test signal is the most scalable reward we have for coding
-agents. It is also the easiest to game, and the failure is invisible: an agent
-that can edit the suite can delete the assertion instead of satisfying it. From
-the outside, "the bug is fixed" and "the test no longer checks" are the same
-green check. Published mitigation work on filtering reward-hacked trajectories
-moved hacked resolution rates from ~29% to ~0.6% — the effect size tells you how
-much of the naive signal was hollow.
+The third is the one no framework reports today and no agent can infer.
 
-There is a deeper limit underneath, sometimes called the *verification horizon*:
-tests only verify what is in their scope, real tasks carry requirements no test
-states, and no amount of test-writing closes that gap. You cannot fix this. You
-can refuse to hide it.
+### No intuition → say the things a human would have inferred
 
-So `agt` makes the suite's *claim strength* a tracked, first-class quantity:
+A failure report should carry what a person would have supplied from context:
 
-- Every case declares its strength: `Smoke < Example < Snapshot < Property < Proof`.
-  A suite reports its strength profile, so "coverage went up" cannot conceal
-  "every new test is a smoke test."
-- Every diff touching the suite is classified per-case as **strengthened /
-  neutral / weakened / silenced / removed**. A weakened assertion hides most
-  comfortably inside a diff that also changes application code, where it reads
-  as incidental cleanup — so weakening is surfaced as its own review category,
-  never as an ordinary line change.
-- Weakening is *not forbidden*. Deleting a wrong test is legitimate work.
-  It is made impossible to do quietly.
-- New tests are scored by mutation, not by coverage. A test that kills no
-  mutants earns no credit, which is the cheapest available defence against the
-  known LLM failure mode of generating property tests that assert something
-  trivially true (`the function returns a value of the right type`).
-- Judged verdicts (LLM-as-judge against a rubric) are recorded as a distinct
-  expectation kind, so a reviewer can always see which gates rest on execution
-  and which rest on an opinion.
+- **What kind of failure this is.** `Inconclusive` — a missing fixture, an
+  unavailable dependency — is a distinct verdict from `Fail`, because an agent
+  that cannot tell them apart repairs a broken harness by editing application
+  code. Almost every framework collapses both into red.
+- **The smallest input that triggers it.** Shrinking on failure by default, not
+  on request; the minimised witness is worth more to a repair loop than the
+  original input ever was.
+- **The exact command to reproduce it**, as a fact rather than an aspiration —
+  which is only possible if the run was deterministic, which is why determinism
+  is a commitment and not a nice-to-have.
+- **The cheapest next probes**, ranked. The framework knows how to get more
+  information — shrink this, replay that seed, bisect this trajectory. It does
+  not know what the code should do, and it must not guess: probes are
+  information-gathering only. Keeping fixes out of that list is what stops the
+  framework becoming a second, worse agent.
+
+And the precondition under all of it: **the run must be reproducible**, because
+the reader cannot discount noise. One seed governs execution order, randomness,
+time, I/O, and — new to this generation — model sampling.
+
+### Incentive to cheat → make the oracle defend itself
+
+The suite is the asset under protection, so its strength becomes a tracked
+quantity rather than an assumed one.
+
+- Every case declares what it proves: `Smoke < Example < Snapshot < Property <
+  Proof`. A suite reports its strength profile, so *coverage went up* cannot
+  conceal *every new test is a smoke test*.
+- Every diff touching tests is classified per case — **strengthened / neutral /
+  weakened / silenced / removed** — and rendered as its own review surface. The
+  reason is specific: a weakened assertion hides most comfortably inside a diff
+  that also changes application code, where the reviewer's attention is on the
+  feature and the test edit reads as incidental cleanup.
+- New tests are scored by **mutation**, not coverage. A case that kills no
+  mutants earns no credit toward the gate. This is the cheapest known defence
+  against the documented failure mode where a model emits a property test
+  asserting something trivially true, like *the function returns a value of the
+  right type*.
+- The referee lives outside the sandbox. Scores and ledger hashes are verified
+  where the agent has no credentials.
+
+Weakening a test is **not** forbidden. Deleting a wrong test is real work. It is
+made impossible to do quietly.
+
+## The part this does not fix
+
+Tests only ever verify what is in their scope. Real tasks carry requirements no
+test states — maintainability, design, the intent behind the ticket — and no
+amount of test-writing closes that gap. The literature calls this the
+*verification horizon* and concludes, correctly, that there is no silver bullet.
+
+`agt` does not claim to close it. The design goal is the opposite: make the gap
+**visible**, so the small number of places where an agent's incentives and the
+project's diverge are exactly where human attention gets spent. Full autonomy on
+the execution loop; mandatory human review on the oracle.
+
+That is also the honest answer to *is this just distrust of agents?* No — it is
+the same reason code review survived good engineers. The check is cheap and the
+failure is silent.
 
 ## What this is not
 
-- **Not an eval harness.** Evals measure a model over a benchmark. `agt` tests a
-  program, with an agent as the primary reader. The two share machinery
-  (trajectories, judges, statistical gates) and answer different questions.
+- **Not an eval harness.** Evals measure a model against a benchmark. `agt`
+  tests a program whose primary reader happens to be a model. Shared machinery,
+  different question.
 - **Not autonomous QA.** No browser driving, no self-healing selectors, no
-  natural-language test authoring. Those are a product category built on top of
-  a framework like this one, not the framework.
-- **Not a human-out-of-the-loop pitch.** The opposite: the point of tracking
-  claim strength is to concentrate scarce human attention on the ~2% of a diff
-  where an agent's incentives and the project's diverge. Full autonomy on the
-  execution loop, mandatory human review on the oracle.
+  natural-language authoring. That is a product category built on top of a
+  framework like this, not the framework.
+- **Not human-out-of-the-loop.** Tracking claim strength exists to concentrate
+  scarce review attention, not to remove it.
+- **Not a new way to write tests.** The assertions are the ones you already
+  write. What changes is what the framework does with them.
 
 ## Why Rust
 
 Not incidental:
 
 - The type system can carry claim strength and evidence structure at compile
-  time, so a weakened oracle is a visible type-level change rather than a
-  deleted line in a string.
-- The DST prior art is here (`madsim`, `turmoil`), and the entropy-control work
-  is the expensive part.
-- The mutation-testing tooling is here (`cargo-mutants`) and already integrates
-  with `cargo-nextest`.
-- Cargo gives one predictable execution model, which is what makes a
-  reproduce-command a reliable promise rather than an aspiration.
+  time, so weakening an oracle is a visible type-level change rather than a
+  quietly deleted line.
+- The deterministic-simulation prior art is here (`madsim`, `turmoil`), and
+  entropy control is the expensive part of that work.
+- The mutation tooling is here (`cargo-mutants`) and already integrates with
+  `cargo-nextest`.
+- Cargo gives one predictable execution model, which is what lets a reproduce
+  command be a promise rather than a hope.
 
 ## Status
 
-The concept is ahead of the code, deliberately. The crate currently fixes the
-vocabulary and the wire format — `Evidence`, `Verdict`, `Seed`, `Oracle`,
-`Strength`, `Movement`. The runner, the entropy control, the mutation scoring
-and the ledger are not built. [04-open-questions.md](04-open-questions.md) is
-honest about which of these are hard and which might not survive contact.
+The concept is deliberately ahead of the code. What exists is the vocabulary and
+the wire format — `Evidence`, `Verdict`, `Seed`, `Oracle`, `Strength`,
+`Movement` — with tests over seed stability and record shape. The runner,
+entropy control, mutation scoring and the ledger are not built; the plan for
+them is the roadmap, and [05-open-questions.md](05-open-questions.md) is honest
+about which parts might not survive contact.

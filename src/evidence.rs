@@ -1,11 +1,14 @@
-//! The failure record: what an agent actually consumes.
+//! The failure record: what a reader with no memory and no intuition needs.
 //!
-//! Harness-engineering practice is consistent on this point — an agent should
-//! receive a *structured observation* for every outcome, success or failure,
-//! rather than a formatted string it has to parse back into meaning. Rust's own
-//! ecosystem is moving the same way (the libtest JSON RFC, `cargo nextest`'s
-//! machine-readable formats), but those describe *that* a test failed. Evidence
-//! describes *how*, and what to do next.
+//! Harness-engineering practice is consistent on one point — an agent should
+//! receive a *structured observation* for every outcome rather than a formatted
+//! string it has to parse back into meaning. Rust's ecosystem is moving the same
+//! way (the libtest JSON RFC, `cargo nextest`'s machine-readable formats), but
+//! those describe *that* a test failed.
+//!
+//! Evidence describes *how it failed, whether it is the same failure as last
+//! time, and what to do next* — the three things the reader cannot supply for
+//! itself.
 
 use serde::{Deserialize, Serialize};
 

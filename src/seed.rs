@@ -1,10 +1,15 @@
-//! Determinism as a managed resource.
+//! Determinism, because the reader cannot shrug.
 //!
-//! Deterministic simulation testing — the FoundationDB lineage, and in Rust
-//! `madsim` and `turmoil` — makes a whole run a pure function of one seed by
-//! controlling four things: execution order, entropy, time, and I/O. `agt`
-//! adopts the same discipline for one reason: an agent repair loop that cannot
-//! reproduce the failure it is repairing is guessing.
+//! A flaky test is mildly annoying to a person: you shrug, re-run, move on. The
+//! shrug is the whole mechanism, and it requires knowing that some failures do
+//! not mean anything. An agent cannot shrug — it attributes a random pass to
+//! whatever it changed last and keeps a change that did nothing.
+//!
+//! So noise in the suite is not an annoyance here; it is corruption of the
+//! signal driving a control loop. Deterministic simulation testing — the
+//! FoundationDB lineage, and in Rust `madsim` and `turmoil` — already makes a
+//! run a pure function of one seed by owning execution, entropy, time and I/O.
+//! Agentic systems add a fifth source: model sampling.
 
 use serde::{Deserialize, Serialize};
 

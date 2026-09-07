@@ -36,33 +36,49 @@ resolve_repo() {
 
 # --------------------------------------------------------------- defaults ---
 
+# Every knob, in one place. Used to enforce configuration precedence:
+#   environment > .agent/config.local.sh > agent.config.sh > built-in defaults
+AGENT_KNOBS="AGENT_WORKTREE_ROOT AGENT_STATE_DIR AGENT_LOG_DIR AGENT_BRANCH_PREFIX
+AGENT_BASE_BRANCH AGENT_JOBS AGENT_CLI AGENT_CLI_ARGS AGENT_SETUP_CMD
+AGENT_VERIFY_CMD AGENT_AUTO_PUSH AGENT_AUTO_PR AGENT_PR_DRAFT"
+
 load_config() {
   resolve_repo
 
+  # Stash whatever the environment supplied; config files are allowed to assign
+  # plainly, and the environment is restored over the top of them afterwards.
+  local knob
+  for knob in $AGENT_KNOBS; do
+    eval "_AGENT_ENV_$knob=\${$knob:-}"
+  done
+
+  AGENT_STATE_DIR="${AGENT_STATE_DIR:-$MAIN_ROOT/.agent}"
+
+  # shellcheck disable=SC1091
+  [ -f "$MAIN_ROOT/agent.config.sh" ] && . "$MAIN_ROOT/agent.config.sh"
+  # shellcheck disable=SC1091
+  [ -f "$AGENT_STATE_DIR/config.local.sh" ] && . "$AGENT_STATE_DIR/config.local.sh"
+
+  for knob in $AGENT_KNOBS; do
+    eval "if [ -n \"\${_AGENT_ENV_$knob}\" ]; then $knob=\"\${_AGENT_ENV_$knob}\"; fi"
+    eval "unset _AGENT_ENV_$knob"
+  done
+
+  # Built-in defaults fill whatever nobody set.
   AGENT_WORKTREE_ROOT="${AGENT_WORKTREE_ROOT:-$MAIN_ROOT/.worktrees}"
   AGENT_STATE_DIR="${AGENT_STATE_DIR:-$MAIN_ROOT/.agent}"
   AGENT_LOG_DIR="${AGENT_LOG_DIR:-$AGENT_STATE_DIR/logs}"
   AGENT_BRANCH_PREFIX="${AGENT_BRANCH_PREFIX:-agent/}"
-  AGENT_BASE_BRANCH="${AGENT_BASE_BRANCH:-}"
   AGENT_JOBS="${AGENT_JOBS:-4}"
   AGENT_CLI="${AGENT_CLI:-claude}"
-  # Full-auto: headless, no permission prompts, no attribution trailers.
+  # Full-auto: headless, no permission prompts.
   AGENT_CLI_ARGS="${AGENT_CLI_ARGS:---permission-mode bypassPermissions}"
   AGENT_SETUP_CMD="${AGENT_SETUP_CMD:-}"
   AGENT_VERIFY_CMD="${AGENT_VERIFY_CMD:-}"
   AGENT_AUTO_PUSH="${AGENT_AUTO_PUSH:-1}"
   AGENT_AUTO_PR="${AGENT_AUTO_PR:-1}"
   AGENT_PR_DRAFT="${AGENT_PR_DRAFT:-0}"
-
-  # Repo-tracked config, then untracked local overrides.
-  # shellcheck disable=SC1091
-  [ -f "$MAIN_ROOT/agent.config.sh" ] && . "$MAIN_ROOT/agent.config.sh"
-  # shellcheck disable=SC1091
-  [ -f "$AGENT_STATE_DIR/config.local.sh" ] && . "$AGENT_STATE_DIR/config.local.sh"
-
-  if [ -z "$AGENT_BASE_BRANCH" ]; then
-    AGENT_BASE_BRANCH="$(default_base_branch)"
-  fi
+  AGENT_BASE_BRANCH="${AGENT_BASE_BRANCH:-$(default_base_branch)}"
 
   mkdir -p "$AGENT_LOG_DIR"
 }

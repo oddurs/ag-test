@@ -66,9 +66,20 @@ cd "$(./bin/agent cd NAME)" # drop into a worktree
 
 ## Configuration
 
-Tracked defaults in [`agent.config.sh`](../agent.config.sh); untracked overrides
-in `.agent/config.local.sh`. The full list of knobs is in
-[`lib/common.sh`](../lib/common.sh).
+Precedence, highest first:
+
+```
+environment  >  .agent/config.local.sh  >  agent.config.sh  >  built-in defaults
+```
+
+Tracked defaults in [`agent.config.sh`](../agent.config.sh); untracked local
+overrides in `.agent/config.local.sh`; the knob list and the built-in defaults
+in [`lib/common.sh`](../lib/common.sh). A one-off override is just an
+environment variable:
+
+```bash
+AGENT_JOBS=8 AGENT_AUTO_PR=0 ./bin/agent fleet tasks.txt
+```
 
 The one that matters is `AGENT_VERIFY_CMD` — the gate every task must pass
 before it can ship. In this repo:
